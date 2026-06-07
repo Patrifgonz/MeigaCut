@@ -69,6 +69,8 @@
         gridModeBtn: $('gridModeBtn'),
         hintManual: $('hintManual'),
         hintGrid: $('hintGrid'),
+        hintSelectAll: $('hintSelectAll'),
+        selectAllCellsBtn: $('selectAllCellsBtn'),
         // Modal de malla
         gridModal: $('gridModal'),
         gridRows: $('gridRows'),
@@ -250,6 +252,11 @@
         dom.hintManual.style.display = mode === 'manual' ? '' : 'none';
         dom.hintGrid.style.display = mode === 'grid' ? '' : 'none';
 
+        // Botón "Todas" y su hint solo en modo malla con grid activa
+        const showGridControls = mode === 'grid' && state.grid;
+        dom.selectAllCellsBtn.style.display = showGridControls ? '' : 'none';
+        dom.hintSelectAll.style.display = showGridControls ? '' : 'none';
+
         // Ajustes del canvas-wrapper según el modo
         if (mode === 'manual') {
             dom.canvas.style.cursor = 'crosshair';
@@ -351,6 +358,21 @@
         state.hoveringLine = null;
         state.isDraggingLine = false;
     }
+
+    // Marca todas las celdas de la malla actual
+    function selectAllCells() {
+        if (state.mode !== 'grid' || !state.grid) return;
+        const { rows, cols } = state.grid;
+        for (let i = 0; i < rows; i++) {
+            for (let j = 0; j < cols; j++) {
+                state.selectedCells.add(`${i},${j}`);
+            }
+        }
+        redraw();
+        updateSelectionInfo();
+    }
+
+    dom.selectAllCellsBtn.addEventListener('click', selectAllCells);
 
     /* ---------------------------------------------------
        Dibujo de la malla sobre el canvas
@@ -818,6 +840,15 @@
         }
 
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
+
+        // Ctrl/Cmd + A -> seleccionar todas las celdas (solo en modo malla)
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+            if (state.mode === 'grid' && state.grid) {
+                e.preventDefault();
+                selectAllCells();
+            }
             return;
         }
 
