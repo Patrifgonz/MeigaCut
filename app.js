@@ -19,6 +19,13 @@
        --------------------------------------------------- */
     const MIN_CELL_PX = 8;            // Separación mínima entre líneas (píxeles canvas)
     const LINE_HIT_PX = 7;            // Radio de detección de línea en píxeles CSS
+    const SNAP_THRESHOLD = 3;         // Umbral de snap: si override está a <3px de la línea base, se borra
+    const HANDLE_RADIUS = 5;          // Radio de los handles de línea (píxeles CSS)
+    const handleCursorMap = {
+        nw: 'nwse-resize', n: 'ns-resize', ne: 'nesw-resize',
+        e: 'ew-resize', se: 'nwse-resize', s: 'ns-resize',
+        sw: 'nesw-resize', w: 'ew-resize',
+    };
 
     const state = {
         image: null,                  // HTMLImageElement cargada
@@ -43,6 +50,23 @@
         hoveringLine: null,           // { type: 'h'|'v'|'corner', ... } para feedback de cursor
         isDraggingLine: false,        // ¿Se está arrastrando una línea o esquina?
         dragOffset: { x: 0, y: 0 },   // Offset (canvas px) entre la línea/esquina y el cursor al iniciar el drag
+        // Arrastre / redimensionado del rectángulo completo de la malla
+        isGridDragging: false,        // ¿Se está moviendo toda la malla?
+        gridDragPending: false,       // Clic en celda pendiente de distinguir click vs drag
+        gridDragStart: null,          // { x, y } canvas px
+        gridDragInitial: null,        // copia del grid al inicio del arrastre
+        gridDragCell: null,           // { row, col } celda clickeada para grid drag
+        isGridResizing: false,        // ¿Se está redimensionando toda la malla?
+        gridResizeHandle: null,       // 'nw'|'n'|'ne'|'e'|'se'|'s'|'sw'|'w'
+        gridResizeStart: null,        // { x, y } canvas px
+        gridResizeInitial: null,      // copia del grid al inicio del redimensionado
+        // Arrastre de borde de celda individual
+        hoveringCellEdge: null,       // { row, col, edge } borde bajo el cursor
+        isDraggingCellEdge: false,    // ¿Se está arrastrando un borde de celda?
+        dragCellEdgeStart: null,      // { row, col, edge, startValue, baseLine }
+        // Arrastre de cuerpo de celda (mover celda completa)
+        isDraggingCell: false,        // ¿Se está moviendo una celda completa?
+        dragCellStart: null,          // { row, col, cursorStart: {x,y}, initialOverrides }
     };
 
     /* ---------------------------------------------------
@@ -90,6 +114,8 @@
         confirmModalIcon: $('confirmModalIcon'),
         confirmModalOk: $('confirmModalOk'),
         confirmModalCancel: $('confirmModalCancel'),
+        // Borde de la malla (modo malla)
+        gridBoundary: $('gridBoundary'),
     };
 
     const ctx = dom.canvas.getContext('2d');
@@ -211,6 +237,7 @@
         if (state.mode === 'grid' && state.grid) {
             drawGrid();
         }
+        updateGridBoundary();
     }
 
     // Sincroniza el tamaño de .canvas-area con el del canvas
@@ -228,6 +255,251 @@
         }
         state.scale = dom.canvas.width / dom.canvas.clientWidth;
     }
+
+    function updateGridBoundary() {
+        if (!state.grid || state.mode !== 'grid') {
+            dom.gridBoundary.classList.add('hidden');
+            return;
+        }
+        const { h, v, rows, cols } = state.grid;
+        const area = dom.canvasArea || dom.canvas.parentElement;
+        const areaRect = area.getBoundingClientRect();
+        const canvasRect = dom.canvas.getBoundingClientRect();
+        const offX = canvasRect.left - areaRect.left;
+        const offY = canvasRect.top - areaRect.top;
+
+        const left   = v[0] / state.scale + offX;
+        const top    = h[0] / state.scale + offY;
+        const right  = v[cols] / state.scale + offX;
+        const bottom = h[rows] / state.scale + offY;
+
+        dom.gridBoundary.classList.remove('hidden');
+        dom.gridBoundary.style.left   = left + 'px';
+        dom.gridBoundary.style.top    = top + 'px';
+        dom.gridBoundary.style.width  = (right - left) + 'px';
+        dom.gridBoundary.style.height = (bottom - top) + 'px';
+    }
+
+    /* ---------------------------------------------------
+       Resolución de bounds de celda (con overrides)
+       --------------------------------------------------- */
+    function getCellBounds(i, j) {
+        const g = state.grid;
+        const key = `${i},${j}`;
+        const ov = (g.cellOverrides && g.cellOverrides[key]) || {};
+
+        let top    = ov.top    !== undefined ? ov.top    : g.h[i];
+        let bottom = ov.bottom !== undefined ? ov.bottom : g.h[i + 1];
+        let left   = ov.left   !== undefined ? ov.left   : g.v[j];
+        let right  = ov.right  !== undefined ? ov.right  : g.v[j + 1];
+
+        // Enforzar tamaño mínimo
+        if (bottom - top < MIN_CELL_PX) bottom = top + MIN_CELL_PX;
+        if (right - left < MIN_CELL_PX) right = left + MIN_CELL_PX;
+
+        return { x: left, y: top, w: right - left, h: bottom - top };
+    }
+
+    function setCellOverride(i, j, edge, value) {
+        const g = state.grid;
+        if (!g.cellOverrides) g.cellOverrides = {};
+        const key = `${i},${j}`;
+
+        // Línea base para este borde
+        let baseLine;
+        if (edge === 'top')    baseLine = g.h[i];
+        else if (edge === 'bottom') baseLine = g.h[i + 1];
+        else if (edge === 'left')   baseLine = g.v[j];
+        else if (edge === 'right')  baseLine = g.v[j + 1];
+
+        // Snap: si el valor está cerca de la línea base, borrar override
+        if (Math.abs(value - baseLine) <= SNAP_THRESHOLD) {
+            if (g.cellOverrides[key]) {
+                delete g.cellOverrides[key][edge];
+                if (Object.keys(g.cellOverrides[key]).length === 0) {
+                    delete g.cellOverrides[key];
+                }
+            }
+            return baseLine;
+        }
+
+        if (!g.cellOverrides[key]) g.cellOverrides[key] = {};
+        g.cellOverrides[key][edge] = value;
+        return value;
+    }
+
+    /* ---------------------------------------------------
+       Detección de borde de celda bajo el cursor
+       --------------------------------------------------- */
+    function findCellEdgeAt(canvasX, canvasY) {
+        if (!state.grid) return null;
+        const { rows, cols } = state.grid;
+        const tol = LINE_HIT_PX * state.scale;
+
+        for (let i = 0; i < rows; i++) {
+            for (let j = 0; j < cols; j++) {
+                const b = getCellBounds(i, j);
+
+                // Borde superior (solo si no es el borde exterior superior de la malla)
+                if (i > 0 && Math.abs(canvasY - b.y) <= tol &&
+                    canvasX >= b.x && canvasX <= b.x + b.w) {
+                    return { row: i, col: j, edge: 'top' };
+                }
+                // Borde inferior (solo si no es el borde exterior inferior)
+                if (i < rows - 1 && Math.abs(canvasY - (b.y + b.h)) <= tol &&
+                    canvasX >= b.x && canvasX <= b.x + b.w) {
+                    return { row: i, col: j, edge: 'bottom' };
+                }
+                // Borde izquierdo (solo si no es el borde exterior izquierdo)
+                if (j > 0 && Math.abs(canvasX - b.x) <= tol &&
+                    canvasY >= b.y && canvasY <= b.y + b.h) {
+                    return { row: i, col: j, edge: 'left' };
+                }
+                // Borde derecho (solo si no es el borde exterior derecho)
+                if (j < cols - 1 && Math.abs(canvasX - (b.x + b.w)) <= tol &&
+                    canvasY >= b.y && canvasY <= b.y + b.h) {
+                    return { row: i, col: j, edge: 'right' };
+                }
+            }
+        }
+        return null;
+    }
+
+    /* ----- Movimiento de toda la malla (arrastre de celda) ----- */
+    function moveGrid(dx, dy) {
+        const g = state.grid;
+        const W = dom.canvas.width;
+        const H = dom.canvas.height;
+        const { rows, cols } = g;
+
+        const minX = g.v[0];
+        const maxX = W - g.v[cols];
+        const minY = g.h[0];
+        const maxY = H - g.h[rows];
+        const clampedDx = Math.max(-minX, Math.min(maxX, dx));
+        const clampedDy = Math.max(-minY, Math.min(maxY, dy));
+
+        for (let j = 0; j <= cols; j++) g.v[j] = g.v[j] + clampedDx;
+        for (let i = 0; i <= rows; i++) g.h[i] = g.h[i] + clampedDy;
+
+        // También mover todos los overrides de celdas
+        if (g.cellOverrides) {
+            for (const key in g.cellOverrides) {
+                const ov = g.cellOverrides[key];
+                if (ov.top !== undefined) ov.top += clampedDy;
+                if (ov.bottom !== undefined) ov.bottom += clampedDy;
+                if (ov.left !== undefined) ov.left += clampedDx;
+                if (ov.right !== undefined) ov.right += clampedDx;
+            }
+        }
+    }
+
+    /* ----- Redimensionado proporcional de toda la malla ----- */
+    function resizeGrid(handle, cp) {
+        const g = state.grid;
+        const W = dom.canvas.width;
+        const H = dom.canvas.height;
+        const { rows, cols } = g;
+        const gi = state.gridResizeInitial;
+
+        // Limpiar overrides al redimensionar la malla completa
+        g.cellOverrides = {};
+
+        // Determinar qué borde se mueve y cuáles son fijos
+        let fixedX0, fixedX1, fixedY0, fixedY1;
+        if (handle === 'nw' || handle === 'w' || handle === 'sw') {
+            fixedX0 = gi.v[0];
+            fixedX1 = gi.v[cols];
+            g.v[0] = Math.max(0, Math.min(gi.v[1] - MIN_CELL_PX, cp.x));
+            fixedX0 = g.v[0];
+        } else if (handle === 'ne' || handle === 'e' || handle === 'se') {
+            fixedX0 = gi.v[0];
+            fixedX1 = W;
+            g.v[cols] = Math.max(gi.v[cols - 1] + MIN_CELL_PX, Math.min(W, cp.x));
+            fixedX1 = g.v[cols];
+        } else {
+            fixedX0 = gi.v[0];
+            fixedX1 = gi.v[cols];
+        }
+
+        if (handle === 'nw' || handle === 'n' || handle === 'ne') {
+            fixedY0 = gi.h[0];
+            fixedY1 = gi.h[rows];
+            g.h[0] = Math.max(0, Math.min(gi.h[1] - MIN_CELL_PX, cp.y));
+            fixedY0 = g.h[0];
+        } else if (handle === 'sw' || handle === 's' || handle === 'se') {
+            fixedY0 = gi.h[0];
+            fixedY1 = H;
+            g.h[rows] = Math.max(gi.h[rows - 1] + MIN_CELL_PX, Math.min(H, cp.y));
+            fixedY1 = g.h[rows];
+        } else {
+            fixedY0 = gi.h[0];
+            fixedY1 = gi.h[rows];
+        }
+
+        const rangeX = fixedX1 - fixedX0;
+        const rangeY = fixedY1 - fixedY0;
+
+        // Escalar las líneas interiores proporcionalmente
+        if (rangeX > 0) {
+            for (let j = 1; j < cols; j++) {
+                const ratio = (gi.v[j] - gi.v[0]) / (gi.v[cols] - gi.v[0]);
+                g.v[j] = Math.round(fixedX0 + ratio * rangeX);
+            }
+        }
+        if (rangeY > 0) {
+            for (let i = 1; i < rows; i++) {
+                const ratio = (gi.h[i] - gi.h[0]) / (gi.h[rows] - gi.h[0]);
+                g.h[i] = Math.round(fixedY0 + ratio * rangeY);
+            }
+        }
+    }
+
+    /* ----- Handles del borde de malla ----- */
+    function onGridBoundaryHandleMouseDown(e, handle) {
+        e.preventDefault();
+        e.stopPropagation();
+        const pos = getCanvasPos(e);
+        const cp = cssToCanvas(pos.x, pos.y);
+        state.isGridResizing = true;
+        state.gridResizeHandle = handle;
+        state.gridResizeStart = cp;
+        state.gridResizeInitial = {
+            h: [...state.grid.h],
+            v: [...state.grid.v],
+        };
+        document.body.classList.add('is-resizing');
+        document.body.style.cursor = handleCursorMap[handle] || 'default';
+        document.addEventListener('mousemove', onGridResizeMouseMove);
+        document.addEventListener('mouseup', onGridResizeMouseUp);
+    }
+
+    function onGridResizeMouseMove(e) {
+        if (!state.isGridResizing) return;
+        e.preventDefault();
+        const pos = getCanvasPos(e);
+        const cp = cssToCanvas(pos.x, pos.y);
+        resizeGrid(state.gridResizeHandle, cp);
+        redraw();
+        updateSelectionInfo();
+    }
+
+    function onGridResizeMouseUp() {
+        state.isGridResizing = false;
+        state.gridResizeHandle = null;
+        state.gridResizeStart = null;
+        state.gridResizeInitial = null;
+        document.body.classList.remove('is-resizing');
+        document.body.style.cursor = '';
+        document.removeEventListener('mousemove', onGridResizeMouseMove);
+        document.removeEventListener('mouseup', onGridResizeMouseUp);
+    }
+
+    // Cablear handles del borde de malla
+    document.querySelectorAll('[data-gbhandle]').forEach((el) => {
+        const handle = el.dataset.gbhandle;
+        el.addEventListener('mousedown', (e) => onGridBoundaryHandleMouseDown(e, handle));
+    });
 
     function updateDimensionsInfo() {
         if (!state.image) {
@@ -285,6 +557,7 @@
         if (mode === 'manual') {
             dom.canvas.style.cursor = 'crosshair';
             hideSelection();
+            dom.gridBoundary.classList.add('hidden');
             dom.placeholderText.textContent = 'Haz clic y arrastra sobre la imagen para crear una selección';
             // Al volver a manual desde grid, no reseteamos state.grid;
             // se mantiene por si el usuario quiere volver al mismo grid.
@@ -301,6 +574,7 @@
         }
 
         updateSelectionInfo();
+        updateGridBoundary();
         redraw();
     }
 
@@ -405,7 +679,7 @@
         for (let i = 0; i <= rows; i++) h.push(Math.round(margin + i * cellH));
         for (let j = 0; j <= cols; j++) v.push(Math.round(margin + j * cellW));
 
-        state.grid = { rows, cols, margin, h, v };
+        state.grid = { rows, cols, margin, h, v, cellOverrides: {} };
     }
 
     function clearGrid() {
@@ -413,6 +687,21 @@
         state.selectedCells.clear();
         state.hoveringLine = null;
         state.isDraggingLine = false;
+        state.isGridDragging = false;
+        state.gridDragPending = false;
+        state.gridDragStart = null;
+        state.gridDragInitial = null;
+        state.gridDragCell = null;
+        state.isGridResizing = false;
+        state.gridResizeHandle = null;
+        state.gridResizeStart = null;
+        state.gridResizeInitial = null;
+        state.hoveringCellEdge = null;
+        state.isDraggingCellEdge = false;
+        state.dragCellEdgeStart = null;
+        state.isDraggingCell = false;
+        state.dragCellStart = null;
+        dom.gridBoundary.classList.add('hidden');
     }
 
     // Marca todas las celdas de la malla actual
@@ -434,7 +723,8 @@
        Dibujo de la malla sobre el canvas
        --------------------------------------------------- */
     function drawGrid() {
-        const { h, v, rows, cols } = state.grid;
+        const { h, v, rows, cols, cellOverrides } = state.grid;
+        const co = cellOverrides || {};
 
         // 1) Resaltar celdas seleccionadas
         ctx.save();
@@ -442,32 +732,85 @@
         for (let i = 0; i < rows; i++) {
             for (let j = 0; j < cols; j++) {
                 if (state.selectedCells.has(`${i},${j}`)) {
-                    ctx.fillRect(v[j], h[i], v[j + 1] - v[j], h[i + 1] - h[i]);
+                    const b = getCellBounds(i, j);
+                    ctx.fillRect(b.x, b.y, b.w, b.h);
                 }
             }
         }
         ctx.restore();
 
-        // 2) Dibujar líneas
-        const lw = Math.max(1, Math.round(state.scale));   // 1 línea CSS px
+        // 2) Dibujar bordes de celda (compartidos + overrides)
+        const lw = Math.max(1, Math.round(state.scale));
         ctx.save();
-        ctx.lineWidth = lw;
-        ctx.strokeStyle = '#ffffff';
         ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
         ctx.shadowBlur = 3;
 
-        for (let i = 1; i < h.length - 1; i++) {
-            ctx.beginPath();
-            ctx.moveTo(0, h[i]);
-            ctx.lineTo(dom.canvas.width, h[i]);
-            ctx.stroke();
+        for (let i = 0; i < rows; i++) {
+            for (let j = 0; j < cols; j++) {
+                const b = getCellBounds(i, j);
+                const key = `${i},${j}`;
+                const ov = co[key] || {};
+
+                ctx.lineWidth = lw;
+
+                // Borde superior
+                if (ov.top !== undefined) {
+                    ctx.strokeStyle = 'rgba(124, 92, 255, 0.8)';
+                    ctx.setLineDash([4 * state.scale, 3 * state.scale]);
+                } else {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.setLineDash([]);
+                }
+                ctx.beginPath();
+                ctx.moveTo(b.x, b.y);
+                ctx.lineTo(b.x + b.w, b.y);
+                ctx.stroke();
+
+                // Borde inferior (solo si es la última fila o tiene override)
+                if (i === rows - 1 || ov.bottom !== undefined) {
+                    if (ov.bottom !== undefined) {
+                        ctx.strokeStyle = 'rgba(124, 92, 255, 0.8)';
+                        ctx.setLineDash([4 * state.scale, 3 * state.scale]);
+                    } else {
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.setLineDash([]);
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(b.x, b.y + b.h);
+                    ctx.lineTo(b.x + b.w, b.y + b.h);
+                    ctx.stroke();
+                }
+
+                // Borde izquierdo
+                if (ov.left !== undefined) {
+                    ctx.strokeStyle = 'rgba(124, 92, 255, 0.8)';
+                    ctx.setLineDash([4 * state.scale, 3 * state.scale]);
+                } else {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.setLineDash([]);
+                }
+                ctx.beginPath();
+                ctx.moveTo(b.x, b.y);
+                ctx.lineTo(b.x, b.y + b.h);
+                ctx.stroke();
+
+                // Borde derecho (solo si es la última columna o tiene override)
+                if (j === cols - 1 || ov.right !== undefined) {
+                    if (ov.right !== undefined) {
+                        ctx.strokeStyle = 'rgba(124, 92, 255, 0.8)';
+                        ctx.setLineDash([4 * state.scale, 3 * state.scale]);
+                    } else {
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.setLineDash([]);
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(b.x + b.w, b.y);
+                    ctx.lineTo(b.x + b.w, b.y + b.h);
+                    ctx.stroke();
+                }
+            }
         }
-        for (let j = 1; j < v.length - 1; j++) {
-            ctx.beginPath();
-            ctx.moveTo(v[j], 0);
-            ctx.lineTo(v[j], dom.canvas.height);
-            ctx.stroke();
-        }
+        ctx.setLineDash([]);
         ctx.restore();
 
         // 3) Dibujar marco exterior de la malla
@@ -483,7 +826,54 @@
         ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
         ctx.restore();
 
-        // 4) Etiquetas de celda (escala según state.scale)
+        // 4) Handles de líneas (círculos en puntos medios de líneas interiores)
+        const hr = HANDLE_RADIUS * state.scale;
+        ctx.save();
+        for (let i = 1; i < h.length - 1; i++) {
+            // Línea horizontal interior: dibujar handle en el centro
+            const cx = dom.canvas.width / 2;
+            const cy = h[i];
+            ctx.beginPath();
+            ctx.arc(cx, cy, hr, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(124, 92, 255, 0.9)';
+            ctx.lineWidth = Math.max(1, Math.round(1.5 * state.scale));
+            ctx.stroke();
+        }
+        for (let j = 1; j < v.length - 1; j++) {
+            // Línea vertical interior: dibujar handle en el centro
+            const cx = v[j];
+            const cy = dom.canvas.height / 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, hr, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(124, 92, 255, 0.9)';
+            ctx.lineWidth = Math.max(1, Math.round(1.5 * state.scale));
+            ctx.stroke();
+        }
+        ctx.restore();
+
+        // 5) Highlight del borde de celda bajo el cursor
+        if (state.hoveringCellEdge) {
+            const { row, col, edge } = state.hoveringCellEdge;
+            const b = getCellBounds(row, col);
+            ctx.save();
+            ctx.strokeStyle = 'rgba(124, 92, 255, 1)';
+            ctx.lineWidth = Math.max(2, Math.round(2 * state.scale));
+            ctx.shadowColor = 'rgba(124, 92, 255, 0.5)';
+            ctx.shadowBlur = 6;
+            ctx.beginPath();
+            if (edge === 'top')    { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + b.w, b.y); }
+            if (edge === 'bottom') { ctx.moveTo(b.x, b.y + b.h); ctx.lineTo(b.x + b.w, b.y + b.h); }
+            if (edge === 'left')   { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x, b.y + b.h); }
+            if (edge === 'right')  { ctx.moveTo(b.x + b.w, b.y); ctx.lineTo(b.x + b.w, b.y + b.h); }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // 6) Etiquetas de celda
         ctx.save();
         const fontPx = Math.max(11, Math.round(16 * Math.min(1, state.scale / 2)));
         ctx.font = `bold ${fontPx}px -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -496,10 +886,10 @@
         let n = 1;
         for (let i = 0; i < rows; i++) {
             for (let j = 0; j < cols; j++) {
-                const cx = (v[j] + v[j + 1]) / 2;
-                const cy = (h[i] + h[i + 1]) / 2;
+                const b = getCellBounds(i, j);
+                const cx = b.x + b.w / 2;
+                const cy = b.y + b.h / 2;
                 const label = String(n++);
-                // Fondo del número para legibilidad
                 const w = ctx.measureText(label).width;
                 ctx.fillStyle = 'rgba(0,0,0,0.55)';
                 ctx.fillRect(cx - w / 2 - 4, cy - fontPx / 2 - 2, w + 8, fontPx + 4);
@@ -511,19 +901,29 @@
     }
 
     /* ---------------------------------------------------
-       Detección de línea, esquina y celda bajo el cursor
+       Detección de línea (solo en handles/círculos), esquina y borde de celda
        --------------------------------------------------- */
-    function findLineAt(canvasX, canvasY) {
-        // Devuelve { type, index } si el punto está cerca de una línea, si no null.
-        // Los bordes exteriores también se pueden arrastrar.
+    function findLineHandleAt(canvasX, canvasY) {
+        // Solo detecta cerca de los handles (círculos) en los puntos medios
+        // de las líneas interiores. No detecta en toda la línea.
         const { h, v } = state.grid;
-        const tol = LINE_HIT_PX * state.scale; // tolerancia en píxeles canvas
+        const handleTol = (HANDLE_RADIUS + 2) * state.scale; // tolerancia del handle (pequeña)
 
-        for (let i = 0; i < h.length; i++) {
-            if (Math.abs(canvasY - h[i]) <= tol) return { type: 'h', index: i };
+        // Líneas horizontales interiores: handle en x = canvas.width / 2
+        const midX = dom.canvas.width / 2;
+        for (let i = 1; i < h.length - 1; i++) {
+            if (Math.abs(canvasX - midX) <= handleTol &&
+                Math.abs(canvasY - h[i]) <= handleTol) {
+                return { type: 'h', index: i };
+            }
         }
-        for (let j = 0; j < v.length; j++) {
-            if (Math.abs(canvasX - v[j]) <= tol) return { type: 'v', index: j };
+        // Líneas verticales interiores: handle en y = canvas.height / 2
+        const midY = dom.canvas.height / 2;
+        for (let j = 1; j < v.length - 1; j++) {
+            if (Math.abs(canvasX - v[j]) <= handleTol &&
+                Math.abs(canvasY - midY) <= handleTol) {
+                return { type: 'v', index: j };
+            }
         }
         return null;
     }
@@ -551,21 +951,18 @@
     }
 
     function getCellAt(canvasX, canvasY) {
-        // Devuelve {row, col} o null si está fuera de la malla
-        const { h, v, rows, cols } = state.grid;
-        if (canvasX < v[0] || canvasX > v[cols] || canvasY < h[0] || canvasY > h[rows]) {
-            return null;
-        }
-        // Buscar fila
-        let row = 0;
+        if (!state.grid) return null;
+        const { rows, cols } = state.grid;
         for (let i = 0; i < rows; i++) {
-            if (canvasY >= h[i] && canvasY <= h[i + 1]) { row = i; break; }
+            for (let j = 0; j < cols; j++) {
+                const b = getCellBounds(i, j);
+                if (canvasX >= b.x && canvasX <= b.x + b.w &&
+                    canvasY >= b.y && canvasY <= b.y + b.h) {
+                    return { row: i, col: j };
+                }
+            }
         }
-        let col = 0;
-        for (let j = 0; j < cols; j++) {
-            if (canvasX >= v[j] && canvasX <= v[j + 1]) { col = j; break; }
-        }
-        return { row, col };
+        return null;
     }
 
     /* ---------------------------------------------------
@@ -603,10 +1000,13 @@
     dom.canvas.addEventListener('mouseleave', (e) => {
         if (state.mode === 'manual') onManualMouseUp(e);
         else if (state.mode === 'grid') onGridMouseUp(e);
-        // Limpiar feedback de línea al salir
         if (state.hoveringLine && !state.isDraggingLine) {
             state.hoveringLine = null;
             dom.canvas.style.cursor = state.mode === 'grid' ? 'default' : 'crosshair';
+        }
+        if (state.hoveringCellEdge && !state.isDraggingCellEdge) {
+            state.hoveringCellEdge = null;
+            redraw();
         }
     });
 
@@ -806,7 +1206,7 @@
         const pos = getCanvasPos(e);
         const cp = cssToCanvas(pos.x, pos.y);
 
-        // 1) Comprobar esquinas primero (tienen prioridad sobre las líneas)
+        // 1) Esquinas exteriores (prioridad máxima)
         const corner = findCornerAt(cp.x, cp.y);
         if (corner) {
             state.isDraggingLine = true;
@@ -819,8 +1219,8 @@
             return;
         }
 
-        // 2) Si no, comprobar línea individual
-        const line = findLineAt(cp.x, cp.y);
+        // 2) Handles de línea (círculos en puntos medios)
+        const line = findLineHandleAt(cp.x, cp.y);
         if (line) {
             state.isDraggingLine = true;
             state.hoveringLine = line;
@@ -831,14 +1231,34 @@
             return;
         }
 
-        // 3) Si no, click en celda
+        // 3) Borde de celda individual — override individual
+        const edge = findCellEdgeAt(cp.x, cp.y);
+        if (edge) {
+            state.isDraggingCellEdge = true;
+            const b = getCellBounds(edge.row, edge.col);
+            const startVal = edge.edge === 'top' ? b.y :
+                             edge.edge === 'bottom' ? b.y + b.h :
+                             edge.edge === 'left' ? b.x : b.x + b.w;
+            state.dragCellEdgeStart = {
+                row: edge.row, col: edge.col, edge: edge.edge,
+                startValue: startVal,
+                cursorStart: { x: cp.x, y: cp.y },
+            };
+            dom.canvas.style.cursor = (edge.edge === 'top' || edge.edge === 'bottom') ? 'ns-resize' : 'ew-resize';
+            return;
+        }
+
+        // 4) Cuerpo de celda → preparar drag de celda o toggle
         const cell = getCellAt(cp.x, cp.y);
         if (cell) {
-            const key = `${cell.row},${cell.col}`;
-            if (state.selectedCells.has(key)) state.selectedCells.delete(key);
-            else state.selectedCells.add(key);
-            redraw();
-            updateSelectionInfo();
+            state.gridDragPending = true;
+            state.gridDragStart = cp;
+            state.gridDragCell = cell;
+            state.gridDragInitial = {
+                h: [...state.grid.h],
+                v: [...state.grid.v],
+                overrides: JSON.parse(JSON.stringify(state.grid.cellOverrides || {})),
+            };
         }
     }
 
@@ -846,14 +1266,50 @@
         const pos = getCanvasPos(e);
         const cp = cssToCanvas(pos.x, pos.y);
 
+        // Arrastre activo de línea/esquina
         if (state.isDraggingLine) {
             dragLine(cp);
             return;
         }
 
-        // 1) Comprobar primero esquinas para el feedback de cursor
+        // Arrastre activo de borde de celda
+        if (state.isDraggingCellEdge && state.dragCellEdgeStart) {
+            dragCellEdge(cp);
+            return;
+        }
+
+        // Arrastre activo de cuerpo de celda
+        if (state.isDraggingCell && state.dragCellStart) {
+            dragCellBody(cp);
+            return;
+        }
+
+        // Grid drag threshold → arrastrar celda individual
+        if (state.gridDragPending && state.gridDragStart) {
+            const dx = cp.x - state.gridDragStart.x;
+            const dy = cp.y - state.gridDragStart.y;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+                state.gridDragPending = false;
+                state.isDraggingCell = true;
+                const cell = state.gridDragCell;
+                const b = getCellBounds(cell.row, cell.col);
+                state.dragCellStart = {
+                    row: cell.row,
+                    col: cell.col,
+                    cursorStart: { x: state.gridDragStart.x, y: state.gridDragStart.y },
+                    initialBounds: { x: b.x, y: b.y, w: b.w, h: b.h },
+                };
+                document.body.classList.add('is-resizing');
+                document.body.style.cursor = 'move';
+            }
+        }
+
+        // --- Feedback de cursor (hover) ---
+
+        // 1) Esquinas
         const corner = findCornerAt(cp.x, cp.y);
         if (corner) {
+            state.hoveringCellEdge = null;
             if (!state.hoveringLine ||
                 state.hoveringLine.type !== 'corner' ||
                 state.hoveringLine.corner.i !== corner.i ||
@@ -861,26 +1317,49 @@
                 state.hoveringLine = { type: 'corner', corner };
                 dom.canvas.style.cursor = corner.cursor;
             }
+            redraw();
             return;
         }
 
-        // 2) Si no, líneas individuales
-        const line = findLineAt(cp.x, cp.y);
-        const changed = (line && !state.hoveringLine) ||
-            (!line && state.hoveringLine) ||
-            (line && state.hoveringLine && (
+        // 2) Handles de línea
+        const line = findLineHandleAt(cp.x, cp.y);
+        if (line) {
+            state.hoveringCellEdge = null;
+            const changed = !state.hoveringLine ||
                 state.hoveringLine.type !== line.type ||
-                state.hoveringLine.index !== line.index
-            ));
-        if (changed) {
-            state.hoveringLine = line;
-            dom.canvas.style.cursor = line
-                ? (line.type === 'h' ? 'ns-resize' : 'ew-resize')
-                : 'default';
+                state.hoveringLine.index !== line.index;
+            if (changed) {
+                state.hoveringLine = line;
+                dom.canvas.style.cursor = line.type === 'h' ? 'ns-resize' : 'ew-resize';
+            }
+            redraw();
+            return;
+        }
+
+        // 3) Borde de celda
+        const edge = findCellEdgeAt(cp.x, cp.y);
+        if (edge) {
+            state.hoveringLine = null;
+            const prev = state.hoveringCellEdge;
+            const edgeChanged = !prev || prev.row !== edge.row || prev.col !== edge.col || prev.edge !== edge.edge;
+            if (edgeChanged) {
+                state.hoveringCellEdge = edge;
+                dom.canvas.style.cursor = (edge.edge === 'top' || edge.edge === 'bottom') ? 'ns-resize' : 'ew-resize';
+                redraw();
+            }
+            return;
+        }
+
+        // 4) Fuera de todo
+        if (state.hoveringCellEdge || state.hoveringLine) {
+            state.hoveringCellEdge = null;
+            state.hoveringLine = null;
+            dom.canvas.style.cursor = 'default';
+            redraw();
         }
     }
 
-    function onGridMouseUp() {
+    function onGridMouseUp(e) {
         if (state.isDraggingLine) {
             state.isDraggingLine = false;
             state.dragOffset = { x: 0, y: 0 };
@@ -894,6 +1373,42 @@
                 }
             } else {
                 dom.canvas.style.cursor = 'default';
+            }
+            return;
+        }
+
+        if (state.isDraggingCellEdge) {
+            state.isDraggingCellEdge = false;
+            state.dragCellEdgeStart = null;
+            dom.canvas.style.cursor = 'default';
+            redraw();
+            return;
+        }
+
+        if (state.isDraggingCell) {
+            state.isDraggingCell = false;
+            state.dragCellStart = null;
+            document.body.classList.remove('is-resizing');
+            document.body.style.cursor = '';
+            redraw();
+            return;
+        }
+
+        // Grid drag pending without threshold → click toggle
+        if (state.gridDragPending) {
+            state.gridDragPending = false;
+            state.gridDragStart = null;
+            state.gridDragInitial = null;
+            state.gridDragCell = null;
+            const pos = getCanvasPos(e);
+            const cp = cssToCanvas(pos.x, pos.y);
+            const cell = getCellAt(cp.x, cp.y);
+            if (cell) {
+                const key = `${cell.row},${cell.col}`;
+                if (state.selectedCells.has(key)) state.selectedCells.delete(key);
+                else state.selectedCells.add(key);
+                redraw();
+                updateSelectionInfo();
             }
         }
     }
@@ -924,6 +1439,64 @@
             const maxX = (j < v.length - 1 ? v[j + 1] : dom.canvas.width) - MIN_CELL_PX;
             v[j] = Math.max(minX, Math.min(maxX, cp.x - state.dragOffset.x));
         }
+        redraw();
+        updateSelectionInfo();
+    }
+
+    /* ---------------------------------------------------
+       Arrastre de borde de celda individual
+       --------------------------------------------------- */
+    function dragCellEdge(cp) {
+        const ds = state.dragCellEdgeStart;
+        const { row, col, edge, startValue, cursorStart } = ds;
+        const delta = (edge === 'top' || edge === 'bottom') ? cp.y - cursorStart.y : cp.x - cursorStart.x;
+        let newValue = startValue + delta;
+
+        const b = getCellBounds(row, col);
+        if (edge === 'top') {
+            const minVal = (row > 0 ? getCellBounds(row - 1, col).y + getCellBounds(row - 1, col).h : 0) + MIN_CELL_PX;
+            const maxVal = b.y + b.h - MIN_CELL_PX;
+            newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        } else if (edge === 'bottom') {
+            const minVal = b.y + MIN_CELL_PX;
+            const maxVal = (row < state.grid.rows - 1 ? getCellBounds(row + 1, col).y : dom.canvas.height) - MIN_CELL_PX;
+            newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        } else if (edge === 'left') {
+            const minVal = (col > 0 ? getCellBounds(row, col - 1).x + getCellBounds(row, col - 1).w : 0) + MIN_CELL_PX;
+            const maxVal = b.x + b.w - MIN_CELL_PX;
+            newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        } else if (edge === 'right') {
+            const minVal = b.x + MIN_CELL_PX;
+            const maxVal = (col < state.grid.cols - 1 ? getCellBounds(row, col + 1).x : dom.canvas.width) - MIN_CELL_PX;
+            newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        }
+
+        setCellOverride(row, col, edge, newValue);
+        redraw();
+        updateSelectionInfo();
+    }
+
+    /* ---------------------------------------------------
+       Arrastre de cuerpo de celda (mover celda completa)
+       --------------------------------------------------- */
+    function dragCellBody(cp) {
+        const ds = state.dragCellStart;
+        const { row, col, cursorStart, initialBounds } = ds;
+        const dx = cp.x - cursorStart.x;
+        const dy = cp.y - cursorStart.y;
+
+        let newX = initialBounds.x + dx;
+        let newY = initialBounds.y + dy;
+
+        // Clamp a los límites del canvas
+        newX = Math.max(0, Math.min(dom.canvas.width - initialBounds.w, newX));
+        newY = Math.max(0, Math.min(dom.canvas.height - initialBounds.h, newY));
+
+        setCellOverride(row, col, 'left', newX);
+        setCellOverride(row, col, 'right', newX + initialBounds.w);
+        setCellOverride(row, col, 'top', newY);
+        setCellOverride(row, col, 'bottom', newY + initialBounds.h);
+
         redraw();
         updateSelectionInfo();
     }
@@ -1001,6 +1574,21 @@
             hideSelection();
         } else if (state.mode === 'grid') {
             state.selectedCells.clear();
+            state.isDraggingLine = false;
+            state.isGridDragging = false;
+            state.gridDragPending = false;
+            state.gridDragStart = null;
+            state.gridDragInitial = null;
+            state.gridDragCell = null;
+            state.isGridResizing = false;
+            state.gridResizeHandle = null;
+            state.hoveringCellEdge = null;
+            state.isDraggingCellEdge = false;
+            state.dragCellEdgeStart = null;
+            state.isDraggingCell = false;
+            state.dragCellStart = null;
+            document.body.classList.remove('is-resizing');
+            document.body.style.cursor = '';
         }
         updateSelectionInfo();
     }
@@ -1088,18 +1676,15 @@
             return;
         }
 
-        const { h, v, rows, cols } = state.grid;
+        const { rows, cols } = state.grid;
         const sorted = Array.from(state.selectedCells)
             .map((k) => k.split(',').map(Number))
             .sort((a, b) => (a[0] * cols + a[1]) - (b[0] * cols + b[1]));
 
         let added = 0;
         for (const [i, j] of sorted) {
-            const x = v[j];
-            const y = h[i];
-            const w = v[j + 1] - v[j];
-            const hh = h[i + 1] - h[i];
-            const r = await addStickerFromRect(x, y, w, hh);
+            const b = getCellBounds(i, j);
+            const r = await addStickerFromRect(b.x, b.y, b.w, b.h);
             if (r) added++;
         }
 

@@ -4,12 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MeigaCut - Recortador de Stickers</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237c5cff'/%3E%3Cg transform='translate(32,30)' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='-9' cy='-9' r='5' fill='white' stroke='none'/%3E%3Ccircle cx='9' cy='-9' r='5' fill='white' stroke='none'/%3E%3Ccircle cx='0' cy='9' r='5' fill='white' stroke='none'/%3E%3Cline x1='-7' y1='-6' x2='0' y2='5'/%3E%3Cline x1='7' y1='-6' x2='0' y2='5'/%3E%3Cline x1='-7' y1='-12' x2='7' y2='-12'/%3E%3C/g%3E%3C/svg%3E" />
     <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
     <!-- ====================== HEADER ====================== -->
     <header class="app-header">
-        <h1>MeigaCut</h1>
+        <h1>
+            <svg class="header-icon" viewBox="0 0 64 64" width="32" height="32">
+                <rect width="64" height="64" rx="14" fill="#7c5cff"/>
+                <g transform="translate(32,30)" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="-9" cy="-9" r="5" fill="white" stroke="none"/>
+                    <circle cx="9" cy="-9" r="5" fill="white" stroke="none"/>
+                    <circle cx="0" cy="9" r="5" fill="white" stroke="none"/>
+                    <line x1="-7" y1="-6" x2="0" y2="5"/>
+                    <line x1="7" y1="-6" x2="0" y2="5"/>
+                    <line x1="-7" y1="-12" x2="7" y2="-12"/>
+                </g>
+            </svg>
+            MeigaCut
+        </h1>
         <p class="subtitle">Recorta stickers manualmente desde una lámina PNG</p>
     </header>
 
@@ -76,6 +90,16 @@
                 <div class="canvas-wrapper">
                     <div class="canvas-area">
                         <canvas id="canvas"></canvas>
+                        <div id="gridBoundary" class="grid-boundary hidden">
+                            <div class="sel-handle sel-handle-nw" data-gbhandle="nw"></div>
+                            <div class="sel-handle sel-handle-n"  data-gbhandle="n"></div>
+                            <div class="sel-handle sel-handle-ne" data-gbhandle="ne"></div>
+                            <div class="sel-handle sel-handle-e"  data-gbhandle="e"></div>
+                            <div class="sel-handle sel-handle-se" data-gbhandle="se"></div>
+                            <div class="sel-handle sel-handle-s"  data-gbhandle="s"></div>
+                            <div class="sel-handle sel-handle-sw" data-gbhandle="sw"></div>
+                            <div class="sel-handle sel-handle-w"  data-gbhandle="w"></div>
+                        </div>
                         <div id="selectionBox" class="selection-box hidden">
                             <div class="sel-handle sel-handle-nw" data-handle="nw"></div>
                             <div class="sel-handle sel-handle-n"  data-handle="n"></div>
