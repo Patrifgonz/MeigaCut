@@ -42,7 +42,7 @@
                     <h2>Arrastra una imagen PNG aquí</h2>
                     <p>o</p>
                     <label for="fileInput" class="btn btn-primary">Seleccionar archivo</label>
-                    <input type="file" id="fileInput" accept="image/png" hidden />
+                    <input type="file" id="fileInput" accept="image/*" hidden />
                 </div>
             </div>
 
@@ -86,7 +86,7 @@
                         Todas
                     </button>
                     <label class="toggle-label" title="Quitar fondo al recortar (flood fill por color)">
-                        <input type="checkbox" id="removeBgToggle" />
+                        <input type="checkbox" id="removeBgToggle" checked />
                         <span class="toggle-switch"></span>
                         <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" opacity="0.3" fill="currentColor"/>
@@ -181,7 +181,7 @@
             </div>
             <div class="form-group">
                 <label for="gridMargin">Margen exterior (px)</label>
-                <input type="number" id="gridMargin" min="0" max="500" value="20" />
+                <input type="number" id="gridMargin" min="0" max="500" value="0" />
             </div>
             <div class="modal-actions">
                 <button id="cancelGridBtn" class="btn btn-secondary" data-close>Cancelar</button>

@@ -599,7 +599,7 @@
     function showGridModal() {
         dom.gridRows.value = dom.gridRows.value || 3;
         dom.gridCols.value = dom.gridCols.value || 3;
-        dom.gridMargin.value = dom.gridMargin.value || 20;
+        dom.gridMargin.value = dom.gridMargin.value || 0;
         dom.gridModal.classList.remove('hidden');
         setTimeout(() => dom.gridRows.focus(), 50);
     }
@@ -830,10 +830,11 @@
 
         // 4) Handles de líneas (círculos en puntos medios de líneas interiores)
         const hr = HANDLE_RADIUS * state.scale;
+        const gridCenterX = (v[0] + v[v.length - 1]) / 2;
+        const gridCenterY = (h[0] + h[h.length - 1]) / 2;
         ctx.save();
         for (let i = 1; i < h.length - 1; i++) {
-            // Línea horizontal interior: dibujar handle en el centro
-            const cx = dom.canvas.width / 2;
+            const cx = gridCenterX;
             const cy = h[i];
             ctx.beginPath();
             ctx.arc(cx, cy, hr, 0, Math.PI * 2);
@@ -844,9 +845,8 @@
             ctx.stroke();
         }
         for (let j = 1; j < v.length - 1; j++) {
-            // Línea vertical interior: dibujar handle en el centro
             const cx = v[j];
-            const cy = dom.canvas.height / 2;
+            const cy = gridCenterY;
             ctx.beginPath();
             ctx.arc(cx, cy, hr, 0, Math.PI * 2);
             ctx.fillStyle = '#ffffff';
@@ -906,21 +906,17 @@
        Detección de línea (solo en handles/círculos), esquina y borde de celda
        --------------------------------------------------- */
     function findLineHandleAt(canvasX, canvasY) {
-        // Solo detecta cerca de los handles (círculos) en los puntos medios
-        // de las líneas interiores. No detecta en toda la línea.
         const { h, v } = state.grid;
-        const handleTol = (HANDLE_RADIUS + 2) * state.scale; // tolerancia del handle (pequeña)
+        const handleTol = (HANDLE_RADIUS + 2) * state.scale;
 
-        // Líneas horizontales interiores: handle en x = canvas.width / 2
-        const midX = dom.canvas.width / 2;
+        const midX = (v[0] + v[v.length - 1]) / 2;
         for (let i = 1; i < h.length - 1; i++) {
             if (Math.abs(canvasX - midX) <= handleTol &&
                 Math.abs(canvasY - h[i]) <= handleTol) {
                 return { type: 'h', index: i };
             }
         }
-        // Líneas verticales interiores: handle en y = canvas.height / 2
-        const midY = dom.canvas.height / 2;
+        const midY = (h[0] + h[h.length - 1]) / 2;
         for (let j = 1; j < v.length - 1; j++) {
             if (Math.abs(canvasX - v[j]) <= handleTol &&
                 Math.abs(canvasY - midY) <= handleTol) {
