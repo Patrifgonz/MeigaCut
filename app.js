@@ -116,6 +116,8 @@
         confirmModalCancel: $('confirmModalCancel'),
         // Borde de la malla (modo malla)
         gridBoundary: $('gridBoundary'),
+        // Quitar fondo
+        removeBgToggle: $('removeBgToggle'),
     };
 
     const ctx = dom.canvas.getContext('2d');
@@ -1606,6 +1608,86 @@
     });
 
     /* ---------------------------------------------------
+       Quitar fondo (flood fill desde bordes)
+       --------------------------------------------------- */
+    const BG_TOLERANCE = 30;
+
+    function removeBackground(canvas) {
+        const ctx2 = canvas.getContext('2d');
+        const { width: W, height: H } = canvas;
+        const imageData = ctx2.getImageData(0, 0, W, H);
+        const data = imageData.data;
+
+        const samples = [];
+        for (let x = 0; x < W; x++) {
+            samples.push(getPixel(data, x, 0, W));
+            samples.push(getPixel(data, x, H - 1, W));
+        }
+        for (let y = 0; y < H; y++) {
+            samples.push(getPixel(data, 0, y, W));
+            samples.push(getPixel(data, W - 1, y, W));
+        }
+
+        const bg = medianColor(samples);
+
+        const visited = new Uint8Array(W * H);
+        const queue = [];
+
+        for (let x = 0; x < W; x++) {
+            if (colorMatch(getPixel(data, x, 0, W), bg)) queue.push(x);
+            if (colorMatch(getPixel(data, x, H - 1, W), bg)) queue.push(x + (H - 1) * W);
+        }
+        for (let y = 0; y < H; y++) {
+            if (colorMatch(getPixel(data, 0, y, W), bg)) queue.push(y * W);
+            if (colorMatch(getPixel(data, W - 1, y, W), bg)) queue.push((W - 1) + y * W);
+        }
+
+        for (const idx of queue) visited[idx] = 1;
+
+        let head = 0;
+        while (head < queue.length) {
+            const idx = queue[head++];
+            data[idx * 4 + 3] = 0;
+
+            const px = idx % W;
+            const py = (idx - px) / W;
+            if (py > 0 && !visited[idx - W] && colorMatch(getPixel(data, px, py - 1, W), bg)) {
+                visited[idx - W] = 1; queue.push(idx - W);
+            }
+            if (py < H - 1 && !visited[idx + W] && colorMatch(getPixel(data, px, py + 1, W), bg)) {
+                visited[idx + W] = 1; queue.push(idx + W);
+            }
+            if (px > 0 && !visited[idx - 1] && colorMatch(getPixel(data, px - 1, py, W), bg)) {
+                visited[idx - 1] = 1; queue.push(idx - 1);
+            }
+            if (px < W - 1 && !visited[idx + 1] && colorMatch(getPixel(data, px + 1, py, W), bg)) {
+                visited[idx + 1] = 1; queue.push(idx + 1);
+            }
+        }
+
+        ctx2.putImageData(imageData, 0, 0);
+    }
+
+    function getPixel(data, x, y, W) {
+        const i = (y * W + x) * 4;
+        return [data[i], data[i + 1], data[i + 2], data[i + 3]];
+    }
+
+    function colorMatch(a, b) {
+        return Math.abs(a[0] - b[0]) <= BG_TOLERANCE &&
+               Math.abs(a[1] - b[1]) <= BG_TOLERANCE &&
+               Math.abs(a[2] - b[2]) <= BG_TOLERANCE;
+    }
+
+    function medianColor(samples) {
+        const byR = [...samples].sort((a, b) => a[0] - b[0]);
+        const byG = [...samples].sort((a, b) => a[1] - b[1]);
+        const byB = [...samples].sort((a, b) => a[2] - b[2]);
+        const mid = Math.floor(samples.length / 2);
+        return [byR[mid][0], byG[mid][1], byB[mid][2]];
+    }
+
+    /* ---------------------------------------------------
        Recortes
        ---------------------------------------------------
        Siempre recortamos desde state.image (la imagen
@@ -1629,6 +1711,10 @@
             tmp.height = ih;
             const tctx = tmp.getContext('2d');
             tctx.drawImage(state.image, ix, iy, iw, ih, 0, 0, iw, ih);
+
+            if (dom.removeBgToggle.checked) {
+                removeBackground(tmp);
+            }
 
             tmp.toBlob((blob) => {
                 if (!blob) { resolve(null); return; }
