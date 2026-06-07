@@ -273,6 +273,39 @@ body {
     box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.3);
 }
 
+/* Handles de redimensionado (8 puntos) */
+.sel-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: white;
+    border: 2px solid var(--accent);
+    border-radius: 2px;
+    pointer-events: auto;
+    box-sizing: border-box;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.sel-handle:hover {
+    background: var(--accent);
+}
+
+.sel-handle-nw { top: 0;    left: 0;    cursor: nwse-resize; }
+.sel-handle-n  { top: 0;    left: 50%;  cursor: ns-resize; }
+.sel-handle-ne { top: 0;    left: 100%; cursor: nesw-resize; }
+.sel-handle-e  { top: 50%;  left: 100%; cursor: ew-resize; }
+.sel-handle-se { top: 100%; left: 100%; cursor: nwse-resize; }
+.sel-handle-s  { top: 100%; left: 50%;  cursor: ns-resize; }
+.sel-handle-sw { top: 100%; left: 0;    cursor: nesw-resize; }
+.sel-handle-w  { top: 50%;  left: 0;    cursor: ew-resize; }
+
+/* Estado de redimensionado activo: cursor fijo en todo el documento */
+body.is-resizing,
+body.is-resizing * {
+    cursor: inherit !important;
+}
+
 /* ---------- Status Bar ---------- */
 .status-bar {
     display: flex;
@@ -647,6 +680,49 @@ body {
     gap: 8px;
     justify-content: flex-end;
     margin-top: 20px;
+}
+
+/* Variante centrada (para confirmaciones) */
+.modal-content-center {
+    text-align: center;
+}
+
+.modal-title-center {
+    text-align: center;
+}
+
+.modal-hint-center {
+    text-align: center;
+    margin-bottom: 4px;
+}
+
+.modal-actions-center {
+    justify-content: center;
+}
+
+.modal-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+}
+
+.modal-icon svg {
+    width: 28px;
+    height: 28px;
+}
+
+.modal-icon-warning {
+    background: rgba(234, 67, 53, 0.15);
+    color: var(--danger);
+}
+
+.modal-icon-info {
+    background: rgba(124, 92, 255, 0.15);
+    color: var(--accent);
 }
 
 /* ---------- Toast Notifications ---------- */

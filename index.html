@@ -76,7 +76,16 @@
                 <div class="canvas-wrapper">
                     <div class="canvas-area">
                         <canvas id="canvas"></canvas>
-                        <div id="selectionBox" class="selection-box hidden"></div>
+                        <div id="selectionBox" class="selection-box hidden">
+                            <div class="sel-handle sel-handle-nw" data-handle="nw"></div>
+                            <div class="sel-handle sel-handle-n"  data-handle="n"></div>
+                            <div class="sel-handle sel-handle-ne" data-handle="ne"></div>
+                            <div class="sel-handle sel-handle-e"  data-handle="e"></div>
+                            <div class="sel-handle sel-handle-se" data-handle="se"></div>
+                            <div class="sel-handle sel-handle-s"  data-handle="s"></div>
+                            <div class="sel-handle sel-handle-sw" data-handle="sw"></div>
+                            <div class="sel-handle sel-handle-w"  data-handle="w"></div>
+                        </div>
                     </div>
                     <div id="placeholder" class="canvas-placeholder">
                         <p id="placeholderText">Haz clic y arrastra sobre la imagen para crear una selección</p>
@@ -143,6 +152,26 @@
             <div class="modal-actions">
                 <button id="cancelGridBtn" class="btn btn-secondary" data-close>Cancelar</button>
                 <button id="applyGridBtn" class="btn btn-primary">Aplicar malla</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====================== CONFIRM MODAL ====================== -->
+    <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+        <div class="modal-backdrop" data-confirm-close></div>
+        <div class="modal-content modal-content-center">
+            <div id="confirmModalIcon" class="modal-icon modal-icon-warning">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+            </div>
+            <h2 id="confirmModalTitle" class="modal-title-center">Confirmar acción</h2>
+            <p id="confirmModalMessage" class="modal-hint modal-hint-center">¿Estás seguro?</p>
+            <div class="modal-actions modal-actions-center">
+                <button id="confirmModalCancel" class="btn btn-secondary" data-confirm-close>Cancelar</button>
+                <button id="confirmModalOk" class="btn btn-danger">Confirmar</button>
             </div>
         </div>
     </div>

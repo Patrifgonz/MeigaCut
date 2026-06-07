@@ -24,6 +24,11 @@
         image: null,                  // HTMLImageElement cargada
         scale: 1,                     // Escala canvas -> CSS
         isDrawing: false,             // ¿Se está dibujando la selección manual?
+        isMoving: false,              // ¿Se está moviendo una selección manual existente?
+        isResizing: false,            // ¿Se está redimensionando la selección manual?
+        resizeHandle: null,           // 'nw'|'n'|'ne'|'e'|'se'|'s'|'sw'|'w'
+        moveStart: null,              // { x, y } canvas px: punto donde se empezó a mover
+        moveInitial: null,            // { x, y } canvas px: posición inicial de la selección al empezar a mover
         startX: 0,                    // Coordenada X inicial (canvas px)
         startY: 0,                    // Coordenada Y inicial (canvas px)
         currentSelection: null,       // { x, y, w, h } en píxeles de canvas (modo manual)
@@ -35,9 +40,9 @@
         // Malla
         grid: null,                   // { rows, cols, margin, h: [], v: [] } (h/v en px canvas)
         selectedCells: new Set(),     // Set de strings "row,col" con celdas marcadas
-        hoveringLine: null,           // { type: 'h'|'v', index } para feedback de cursor
-        isDraggingLine: false,        // ¿Se está arrastrando una línea?
-        dragOffset: 0,                // Offset (canvas px) entre la línea y el cursor al iniciar el drag
+        hoveringLine: null,           // { type: 'h'|'v'|'corner', ... } para feedback de cursor
+        isDraggingLine: false,        // ¿Se está arrastrando una línea o esquina?
+        dragOffset: { x: 0, y: 0 },   // Offset (canvas px) entre la línea/esquina y el cursor al iniciar el drag
     };
 
     /* ---------------------------------------------------
@@ -78,6 +83,13 @@
         gridMargin: $('gridMargin'),
         applyGridBtn: $('applyGridBtn'),
         cancelGridBtn: $('cancelGridBtn'),
+        // Modal de confirmación
+        confirmModal: $('confirmModal'),
+        confirmModalTitle: $('confirmModalTitle'),
+        confirmModalMessage: $('confirmModalMessage'),
+        confirmModalIcon: $('confirmModalIcon'),
+        confirmModalOk: $('confirmModalOk'),
+        confirmModalCancel: $('confirmModalCancel'),
     };
 
     const ctx = dom.canvas.getContext('2d');
@@ -238,6 +250,18 @@
         };
     }
 
+    // Cursor CSS asociado a cada handle
+    const HANDLE_CURSORS = {
+        nw: 'nwse-resize',
+        n:  'ns-resize',
+        ne: 'nesw-resize',
+        e:  'ew-resize',
+        se: 'nwse-resize',
+        s:  'ns-resize',
+        sw: 'nesw-resize',
+        w:  'ew-resize',
+    };
+
     /* ---------------------------------------------------
        Cambio de modo
        --------------------------------------------------- */
@@ -337,6 +361,38 @@
         setMode('grid');
         showToast(`Malla ${rows}×${cols} creada`, 'success');
     }
+
+    /* ---------------------------------------------------
+       Modal de confirmación genérica
+       ---------------------------------------------------
+       Sustituye a window.confirm() con una modal coherente
+       con el resto de la UI. Recibe el texto y un callback.
+       --------------------------------------------------- */
+    function showConfirmModal({ title, message, confirmText = 'Confirmar', cancelText = 'Cancelar', danger = true, onConfirm }) {
+        dom.confirmModalTitle.textContent = title;
+        dom.confirmModalMessage.textContent = message;
+        dom.confirmModalOk.textContent = confirmText;
+        dom.confirmModalCancel.textContent = cancelText;
+        dom.confirmModalOk.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+        dom.confirmModalIcon.className = 'modal-icon ' + (danger ? 'modal-icon-warning' : 'modal-icon-info');
+
+        // Reemplazar handler del botón OK para esta confirmación
+        dom.confirmModalOk.onclick = () => {
+            hideConfirmModal();
+            if (typeof onConfirm === 'function') onConfirm();
+        };
+
+        dom.confirmModal.classList.remove('hidden');
+    }
+
+    function hideConfirmModal() {
+        dom.confirmModal.classList.add('hidden');
+    }
+
+    // Cerrar al pulsar backdrop o botón con data-confirm-close
+    dom.confirmModal.addEventListener('click', (e) => {
+        if (e.target.dataset.confirmClose !== undefined) hideConfirmModal();
+    });
 
     function buildGrid(rows, cols, margin) {
         const W = dom.canvas.width;
@@ -455,7 +511,7 @@
     }
 
     /* ---------------------------------------------------
-       Detección de línea y celda bajo el cursor
+       Detección de línea, esquina y celda bajo el cursor
        --------------------------------------------------- */
     function findLineAt(canvasX, canvasY) {
         // Devuelve { type, index } si el punto está cerca de una línea, si no null.
@@ -468,6 +524,28 @@
         }
         for (let j = 0; j < v.length; j++) {
             if (Math.abs(canvasX - v[j]) <= tol) return { type: 'v', index: j };
+        }
+        return null;
+    }
+
+    // Detecta si el cursor está cerca de una de las 4 esquinas
+    // exteriores de la malla (intersecciones de líneas de borde).
+    // Devuelve { i, j, cursor } o null.
+    function findCornerAt(canvasX, canvasY) {
+        const { h, v, rows, cols } = state.grid;
+        const tol = LINE_HIT_PX * state.scale;
+        // Solo las 4 intersecciones exteriores
+        const corners = [
+            { i: 0,     j: 0,     cursor: 'nwse-resize' },
+            { i: 0,     j: cols,  cursor: 'nesw-resize' },
+            { i: rows,  j: 0,     cursor: 'nesw-resize' },
+            { i: rows,  j: cols,  cursor: 'nwse-resize' },
+        ];
+        for (const c of corners) {
+            if (Math.abs(canvasX - v[c.j]) <= tol &&
+                Math.abs(canvasY - h[c.i]) <= tol) {
+                return c;
+            }
         }
         return null;
     }
@@ -533,35 +611,187 @@
     });
 
     /* ----- Modo manual ----- */
+
+    // ¿El punto (canvasX, canvasY) cae dentro de la selección actual?
+    function pointInSelection(canvasX, canvasY) {
+        const s = state.currentSelection;
+        if (!s || s.w === 0 || s.h === 0) return false;
+        return canvasX >= s.x && canvasX <= s.x + s.w &&
+               canvasY >= s.y && canvasY <= s.y + s.h;
+    }
+
+    // Listeners a nivel de document durante draw/move manuales.
+    // Se usan en lugar del mousemove del canvas para que la interacción
+    // no se rompa cuando el cursor pasa por encima de los handles
+    // (que tienen pointer-events: auto y dispararían mouseleave del canvas).
+    function onManualDragMove(e) {
+        const pos = getCanvasPos(e);
+        const cp = cssToCanvas(pos.x, pos.y);
+
+        if (state.isMoving) {
+            const dx = cp.x - state.moveStart.x;
+            const dy = cp.y - state.moveStart.y;
+            const s = state.currentSelection;
+            let nx = state.moveInitial.x + dx;
+            let ny = state.moveInitial.y + dy;
+            nx = Math.max(0, Math.min(dom.canvas.width - s.w, nx));
+            ny = Math.max(0, Math.min(dom.canvas.height - s.h, ny));
+            s.x = nx;
+            s.y = ny;
+            updateSelectionBox();
+        } else if (state.isDrawing) {
+            const x = Math.min(state.startX, cp.x);
+            const y = Math.min(state.startY, cp.y);
+            const w = Math.abs(cp.x - state.startX);
+            const h = Math.abs(cp.y - state.startY);
+            state.currentSelection = { x, y, w, h };
+            updateSelectionBox();
+        }
+    }
+
+    function onManualDragUp() {
+        if (state.isMoving) {
+            state.isMoving = false;
+            state.moveStart = null;
+            state.moveInitial = null;
+        } else if (state.isDrawing) {
+            state.isDrawing = false;
+            if (!state.currentSelection ||
+                state.currentSelection.w < 4 ||
+                state.currentSelection.h < 4) {
+                cancelSelection();
+            }
+        }
+        document.removeEventListener('mousemove', onManualDragMove);
+        document.removeEventListener('mouseup', onManualDragUp);
+    }
+
+    function attachManualDragListeners() {
+        document.addEventListener('mousemove', onManualDragMove);
+        document.addEventListener('mouseup', onManualDragUp);
+    }
+
     function onManualMouseDown(e) {
         const pos = getCanvasPos(e);
         const cp = cssToCanvas(pos.x, pos.y);
+
+        // Si ya hay selección y se hace clic DENTRO, moverla
+        if (pointInSelection(cp.x, cp.y)) {
+            state.isMoving = true;
+            state.moveStart = { x: cp.x, y: cp.y };
+            state.moveInitial = { x: state.currentSelection.x, y: state.currentSelection.y };
+            dom.canvas.style.cursor = 'move';
+            attachManualDragListeners();
+            return;
+        }
+
+        // Si no, empezar una nueva selección desde cero
         state.isDrawing = true;
         state.startX = cp.x;
         state.startY = cp.y;
         state.currentSelection = { x: cp.x, y: cp.y, w: 0, h: 0 };
         showSelectionBox();
+        attachManualDragListeners();
     }
 
     function onManualMouseMove(e) {
-        if (!state.isDrawing) return;
+        // Solo para feedback de cursor cuando NO estamos arrastrando
+        if (state.isDrawing || state.isMoving) return;
         const pos = getCanvasPos(e);
         const cp = cssToCanvas(pos.x, pos.y);
-        const x = Math.min(state.startX, cp.x);
-        const y = Math.min(state.startY, cp.y);
-        const w = Math.abs(cp.x - state.startX);
-        const h = Math.abs(cp.y - state.startY);
-        state.currentSelection = { x, y, w, h };
-        updateSelectionBox();
+        dom.canvas.style.cursor = pointInSelection(cp.x, cp.y) ? 'move' : 'crosshair';
     }
 
     function onManualMouseUp() {
-        if (!state.isDrawing) return;
-        state.isDrawing = false;
-        if (state.currentSelection.w < 4 || state.currentSelection.h < 4) {
-            cancelSelection();
-        }
+        // El final del drag lo gestiona onManualDragUp (listener de document).
+        // Este handler queda como no-op para mantener la simetría con el
+        // dispatch del modo grid.
     }
+
+    /* ----- Redimensionado de la selección manual ----- */
+
+    const MIN_SEL_PX = 4;
+
+    // Redimensiona la selección desde el handle que se está arrastrando.
+    // El lado/esquina opuesta queda fijo.
+    function resizeSelection(mouseX, mouseY) {
+        const s = state.currentSelection;
+        if (!s || !state.resizeHandle) return;
+
+        const right = s.x + s.w;
+        const bottom = s.y + s.h;
+        let nx = s.x, ny = s.y, nw = s.w, nh = s.h;
+
+        switch (state.resizeHandle) {
+            case 'nw': nx = mouseX; ny = mouseY; nw = right - nx;  nh = bottom - ny; break;
+            case 'n':                       ny = mouseY; nh = bottom - ny;            break;
+            case 'ne':                      ny = mouseY; nw = mouseX - s.x; nh = bottom - ny; break;
+            case 'e':                                            nw = mouseX - s.x;            break;
+            case 'se':                                           nw = mouseX - s.x; nh = mouseY - s.y; break;
+            case 's':                                                              nh = mouseY - s.y; break;
+            case 'sw': nx = mouseX; nw = right - nx;  nh = mouseY - s.y;            break;
+            case 'w':  nx = mouseX; nw = right - nx;                                  break;
+        }
+
+        // Tamaño mínimo: si la dimensión cae por debajo, anclar al lado opuesto
+        if (nw < MIN_SEL_PX) {
+            if (state.resizeHandle === 'nw' || state.resizeHandle === 'w' || state.resizeHandle === 'sw') {
+                nx = right - MIN_SEL_PX;
+            }
+            nw = MIN_SEL_PX;
+        }
+        if (nh < MIN_SEL_PX) {
+            if (state.resizeHandle === 'nw' || state.resizeHandle === 'n' || state.resizeHandle === 'ne') {
+                ny = bottom - MIN_SEL_PX;
+            }
+            nh = MIN_SEL_PX;
+        }
+
+        // Limitar a los bordes del canvas
+        if (nx < 0) { nw += nx; nx = 0; }
+        if (ny < 0) { nh += ny; ny = 0; }
+        if (nx + nw > dom.canvas.width) nw = dom.canvas.width - nx;
+        if (ny + nh > dom.canvas.height) nh = dom.canvas.height - ny;
+
+        s.x = nx; s.y = ny; s.w = nw; s.h = nh;
+        updateSelectionBox();
+        updateSelectionInfo();
+    }
+
+    function onHandleMouseDown(e, handle) {
+        e.stopPropagation();
+        e.preventDefault();
+        state.isResizing = true;
+        state.resizeHandle = handle;
+        // Cursor global mientras dure el drag
+        document.body.classList.add('is-resizing');
+        document.body.style.cursor = HANDLE_CURSORS[handle];
+        document.addEventListener('mousemove', onResizeMouseMove);
+        document.addEventListener('mouseup', onResizeMouseUp);
+    }
+
+    function onResizeMouseMove(e) {
+        if (!state.isResizing) return;
+        e.preventDefault();
+        const pos = getCanvasPos(e);
+        const cp = cssToCanvas(pos.x, pos.y);
+        resizeSelection(cp.x, cp.y);
+    }
+
+    function onResizeMouseUp() {
+        state.isResizing = false;
+        state.resizeHandle = null;
+        document.body.classList.remove('is-resizing');
+        document.body.style.cursor = '';
+        document.removeEventListener('mousemove', onResizeMouseMove);
+        document.removeEventListener('mouseup', onResizeMouseUp);
+    }
+
+    // Cablear los 8 handles
+    document.querySelectorAll('.sel-handle').forEach((el) => {
+        const handle = el.dataset.handle;
+        el.addEventListener('mousedown', (e) => onHandleMouseDown(e, handle));
+    });
 
     function cssToCanvas(cssX, cssY) {
         return { x: cssX * state.scale, y: cssY * state.scale };
@@ -575,26 +805,40 @@
     function onGridMouseDown(e) {
         const pos = getCanvasPos(e);
         const cp = cssToCanvas(pos.x, pos.y);
-        const line = findLineAt(cp.x, cp.y);
 
-        if (line) {
-            // Iniciar drag de la línea
+        // 1) Comprobar esquinas primero (tienen prioridad sobre las líneas)
+        const corner = findCornerAt(cp.x, cp.y);
+        if (corner) {
             state.isDraggingLine = true;
-            const arr = line.type === 'h' ? state.grid.h : state.grid.v;
-            const coord = line.type === 'h' ? cp.y : cp.x;
-            state.dragOffset = coord - arr[line.index];
-            state.hoveringLine = line; // también por si el primer mousemove aún no se disparó
+            state.hoveringLine = { type: 'corner', corner };
+            state.dragOffset = {
+                x: cp.x - state.grid.v[corner.j],
+                y: cp.y - state.grid.h[corner.i],
+            };
+            dom.canvas.style.cursor = corner.cursor;
+            return;
+        }
+
+        // 2) Si no, comprobar línea individual
+        const line = findLineAt(cp.x, cp.y);
+        if (line) {
+            state.isDraggingLine = true;
+            state.hoveringLine = line;
+            state.dragOffset = line.type === 'h'
+                ? { x: 0, y: cp.y - state.grid.h[line.index] }
+                : { x: cp.x - state.grid.v[line.index], y: 0 };
             dom.canvas.style.cursor = line.type === 'h' ? 'ns-resize' : 'ew-resize';
-        } else {
-            // Click en celda: alternar selección
-            const cell = getCellAt(cp.x, cp.y);
-            if (cell) {
-                const key = `${cell.row},${cell.col}`;
-                if (state.selectedCells.has(key)) state.selectedCells.delete(key);
-                else state.selectedCells.add(key);
-                redraw();
-                updateSelectionInfo();
-            }
+            return;
+        }
+
+        // 3) Si no, click en celda
+        const cell = getCellAt(cp.x, cp.y);
+        if (cell) {
+            const key = `${cell.row},${cell.col}`;
+            if (state.selectedCells.has(key)) state.selectedCells.delete(key);
+            else state.selectedCells.add(key);
+            redraw();
+            updateSelectionInfo();
         }
     }
 
@@ -607,10 +851,28 @@
             return;
         }
 
-        // Feedback de cursor al pasar por una línea
+        // 1) Comprobar primero esquinas para el feedback de cursor
+        const corner = findCornerAt(cp.x, cp.y);
+        if (corner) {
+            if (!state.hoveringLine ||
+                state.hoveringLine.type !== 'corner' ||
+                state.hoveringLine.corner.i !== corner.i ||
+                state.hoveringLine.corner.j !== corner.j) {
+                state.hoveringLine = { type: 'corner', corner };
+                dom.canvas.style.cursor = corner.cursor;
+            }
+            return;
+        }
+
+        // 2) Si no, líneas individuales
         const line = findLineAt(cp.x, cp.y);
-        if ((line && !state.hoveringLine) || (!line && state.hoveringLine) ||
-            (line && state.hoveringLine && (line.type !== state.hoveringLine.type || line.index !== state.hoveringLine.index))) {
+        const changed = (line && !state.hoveringLine) ||
+            (!line && state.hoveringLine) ||
+            (line && state.hoveringLine && (
+                state.hoveringLine.type !== line.type ||
+                state.hoveringLine.index !== line.index
+            ));
+        if (changed) {
             state.hoveringLine = line;
             dom.canvas.style.cursor = line
                 ? (line.type === 'h' ? 'ns-resize' : 'ew-resize')
@@ -621,27 +883,46 @@
     function onGridMouseUp() {
         if (state.isDraggingLine) {
             state.isDraggingLine = false;
-            state.dragOffset = 0;
-            dom.canvas.style.cursor = state.hoveringLine
-                ? (state.hoveringLine.type === 'h' ? 'ns-resize' : 'ew-resize')
-                : 'default';
+            state.dragOffset = { x: 0, y: 0 };
+            if (state.hoveringLine) {
+                if (state.hoveringLine.type === 'corner') {
+                    dom.canvas.style.cursor = state.hoveringLine.corner.cursor;
+                } else if (state.hoveringLine.type === 'h') {
+                    dom.canvas.style.cursor = 'ns-resize';
+                } else if (state.hoveringLine.type === 'v') {
+                    dom.canvas.style.cursor = 'ew-resize';
+                }
+            } else {
+                dom.canvas.style.cursor = 'default';
+            }
         }
     }
 
-    // Mueve la línea que se está arrastrando, respetando los vecinos
-    // y el tamaño mínimo de celda.
+    // Mueve la línea o esquina que se está arrastrando, respetando
+    // los vecinos y el tamaño mínimo de celda.
     function dragLine(cp) {
         const { h, v } = state.grid;
-        if (state.hoveringLine.type === 'h') {
-            const i = state.hoveringLine.index;
+        const hl = state.hoveringLine;
+
+        if (hl.type === 'h') {
+            const i = hl.index;
             const minY = (i > 0 ? h[i - 1] : 0) + MIN_CELL_PX;
             const maxY = (i < h.length - 1 ? h[i + 1] : dom.canvas.height) - MIN_CELL_PX;
-            h[i] = Math.max(minY, Math.min(maxY, cp.y - state.dragOffset));
-        } else {
-            const j = state.hoveringLine.index;
+            h[i] = Math.max(minY, Math.min(maxY, cp.y - state.dragOffset.y));
+        } else if (hl.type === 'v') {
+            const j = hl.index;
             const minX = (j > 0 ? v[j - 1] : 0) + MIN_CELL_PX;
             const maxX = (j < v.length - 1 ? v[j + 1] : dom.canvas.width) - MIN_CELL_PX;
-            v[j] = Math.max(minX, Math.min(maxX, cp.x - state.dragOffset));
+            v[j] = Math.max(minX, Math.min(maxX, cp.x - state.dragOffset.x));
+        } else if (hl.type === 'corner') {
+            // Arrastrar las dos líneas perpendiculares a la vez
+            const { i, j } = hl.corner;
+            const minY = (i > 0 ? h[i - 1] : 0) + MIN_CELL_PX;
+            const maxY = (i < h.length - 1 ? h[i + 1] : dom.canvas.height) - MIN_CELL_PX;
+            h[i] = Math.max(minY, Math.min(maxY, cp.y - state.dragOffset.y));
+            const minX = (j > 0 ? v[j - 1] : 0) + MIN_CELL_PX;
+            const maxX = (j < v.length - 1 ? v[j + 1] : dom.canvas.width) - MIN_CELL_PX;
+            v[j] = Math.max(minX, Math.min(maxX, cp.x - state.dragOffset.x));
         }
         redraw();
         updateSelectionInfo();
@@ -709,7 +990,14 @@
     function cancelSelection() {
         if (state.mode === 'manual') {
             state.isDrawing = false;
+            state.isMoving = false;
+            state.isResizing = false;
+            state.resizeHandle = null;
+            state.moveStart = null;
+            state.moveInitial = null;
             state.currentSelection = null;
+            document.body.classList.remove('is-resizing');
+            document.body.style.cursor = '';
             hideSelection();
         } else if (state.mode === 'grid') {
             state.selectedCells.clear();
@@ -830,11 +1118,20 @@
        Teclado: Enter y Escape
        --------------------------------------------------- */
     document.addEventListener('keydown', (e) => {
-        // Si la modal está abierta, gestionamos su cierre
+        // Si la modal de malla está abierta, gestionamos su cierre
         if (!dom.gridModal.classList.contains('hidden')) {
             if (e.key === 'Escape') {
                 e.preventDefault();
                 hideGridModal();
+            }
+            return;
+        }
+
+        // Si la modal de confirmación está abierta, Esc la cierra
+        if (!dom.confirmModal.classList.contains('hidden')) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                hideConfirmModal();
             }
             return;
         }
@@ -927,11 +1224,20 @@
 
     function clearAllStickers() {
         if (state.stickers.length === 0) return;
-        if (!confirm('¿Borrar todos los stickers?')) return;
-        state.stickers.forEach((s) => URL.revokeObjectURL(s.url));
-        state.stickers = [];
-        renderStickerList();
-        showToast('Lista vaciada', '');
+        const count = state.stickers.length;
+        showConfirmModal({
+            title: 'Borrar todos los stickers',
+            message: `Se eliminarán ${count} sticker${count !== 1 ? 's' : ''} de la lista. Esta acción no se puede deshacer.`,
+            confirmText: 'Sí, borrar todo',
+            cancelText: 'Cancelar',
+            danger: true,
+            onConfirm: () => {
+                state.stickers.forEach((s) => URL.revokeObjectURL(s.url));
+                state.stickers = [];
+                renderStickerList();
+                showToast('Lista vaciada', '');
+            },
+        });
     }
 
     dom.clearAllBtn.addEventListener('click', clearAllStickers);
