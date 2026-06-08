@@ -472,8 +472,8 @@
         };
         document.body.classList.add('is-resizing');
         document.body.style.cursor = handleCursorMap[handle] || 'default';
-        document.addEventListener('mousemove', onGridResizeMouseMove);
-        document.addEventListener('mouseup', onGridResizeMouseUp);
+        document.addEventListener('pointermove', onGridResizeMouseMove);
+        document.addEventListener('pointerup', onGridResizeMouseUp);
     }
 
     function onGridResizeMouseMove(e) {
@@ -493,14 +493,14 @@
         state.gridResizeInitial = null;
         document.body.classList.remove('is-resizing');
         document.body.style.cursor = '';
-        document.removeEventListener('mousemove', onGridResizeMouseMove);
-        document.removeEventListener('mouseup', onGridResizeMouseUp);
+        document.removeEventListener('pointermove', onGridResizeMouseMove);
+        document.removeEventListener('pointerup', onGridResizeMouseUp);
     }
 
     // Cablear handles del borde de malla
     document.querySelectorAll('[data-gbhandle]').forEach((el) => {
         const handle = el.dataset.gbhandle;
-        el.addEventListener('mousedown', (e) => onGridBoundaryHandleMouseDown(e, handle));
+        el.addEventListener('pointerdown', (e) => onGridBoundaryHandleMouseDown(e, handle));
     });
 
     function updateDimensionsInfo() {
@@ -966,7 +966,7 @@
     /* ---------------------------------------------------
        Eventos de ratón (despachan según modo)
        --------------------------------------------------- */
-    dom.canvas.addEventListener('mousedown', (e) => {
+    dom.canvas.addEventListener('pointerdown', (e) => {
         if (!state.image) return;
         e.preventDefault();
         updateScale();
@@ -979,7 +979,7 @@
         }
     });
 
-    dom.canvas.addEventListener('mousemove', (e) => {
+    dom.canvas.addEventListener('pointermove', (e) => {
         if (!state.image) return;
         e.preventDefault();
 
@@ -990,12 +990,12 @@
         }
     });
 
-    dom.canvas.addEventListener('mouseup', (e) => {
+    dom.canvas.addEventListener('pointerup', (e) => {
         if (state.mode === 'manual') onManualMouseUp(e);
         else if (state.mode === 'grid') onGridMouseUp(e);
     });
 
-    dom.canvas.addEventListener('mouseleave', (e) => {
+    dom.canvas.addEventListener('pointerleave', (e) => {
         if (state.mode === 'manual') onManualMouseUp(e);
         else if (state.mode === 'grid') onGridMouseUp(e);
         if (state.hoveringLine && !state.isDraggingLine) {
@@ -1060,13 +1060,13 @@
                 cancelSelection();
             }
         }
-        document.removeEventListener('mousemove', onManualDragMove);
-        document.removeEventListener('mouseup', onManualDragUp);
+        document.removeEventListener('pointermove', onManualDragMove);
+        document.removeEventListener('pointerup', onManualDragUp);
     }
 
     function attachManualDragListeners() {
-        document.addEventListener('mousemove', onManualDragMove);
-        document.addEventListener('mouseup', onManualDragUp);
+        document.addEventListener('pointermove', onManualDragMove);
+        document.addEventListener('pointerup', onManualDragUp);
     }
 
     function onManualMouseDown(e) {
@@ -1164,8 +1164,8 @@
         // Cursor global mientras dure el drag
         document.body.classList.add('is-resizing');
         document.body.style.cursor = HANDLE_CURSORS[handle];
-        document.addEventListener('mousemove', onResizeMouseMove);
-        document.addEventListener('mouseup', onResizeMouseUp);
+        document.addEventListener('pointermove', onResizeMouseMove);
+        document.addEventListener('pointerup', onResizeMouseUp);
     }
 
     function onResizeMouseMove(e) {
@@ -1181,14 +1181,14 @@
         state.resizeHandle = null;
         document.body.classList.remove('is-resizing');
         document.body.style.cursor = '';
-        document.removeEventListener('mousemove', onResizeMouseMove);
-        document.removeEventListener('mouseup', onResizeMouseUp);
+        document.removeEventListener('pointermove', onResizeMouseMove);
+        document.removeEventListener('pointerup', onResizeMouseUp);
     }
 
     // Cablear los 8 handles
     document.querySelectorAll('.sel-handle').forEach((el) => {
         const handle = el.dataset.handle;
-        el.addEventListener('mousedown', (e) => onHandleMouseDown(e, handle));
+        el.addEventListener('pointerdown', (e) => onHandleMouseDown(e, handle));
     });
 
     function cssToCanvas(cssX, cssY) {

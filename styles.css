@@ -293,6 +293,7 @@ body {
     object-fit: contain;
     cursor: crosshair;
     user-select: none;
+    touch-action: none;
     display: block;
 }
 
@@ -302,6 +303,7 @@ body {
     line-height: 0;
     max-width: 100%;
     max-height: 100%;
+    touch-action: none;
 }
 
 .canvas-area #canvas {
@@ -349,6 +351,7 @@ body {
     border: 2px solid var(--accent);
     border-radius: 2px;
     pointer-events: auto;
+    touch-action: none;
     box-sizing: border-box;
     transform: translate(-50%, -50%);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
