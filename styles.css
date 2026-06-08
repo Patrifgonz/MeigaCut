@@ -267,6 +267,10 @@ body {
     border: 1px solid var(--border);
 }
 
+.crop-btn-mobile {
+    display: none;
+}
+
 .canvas-wrapper {
     flex: 1;
     position: relative;
@@ -857,5 +861,11 @@ body.is-resizing * {
     .sidebar {
         border-left: none;
         border-top: 1px solid var(--border);
+    }
+
+    .crop-btn-mobile {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 }

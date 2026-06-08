@@ -118,6 +118,8 @@
         gridBoundary: $('gridBoundary'),
         // Quitar fondo
         removeBgToggle: $('removeBgToggle'),
+        // Botón recortar (móvil)
+        cropBtn: $('cropBtn'),
     };
 
     const ctx = dom.canvas.getContext('2d');
@@ -1824,6 +1826,12 @@
             e.preventDefault();
             cancelSelection();
         }
+    });
+
+    // Botón "Recortar" (para móvil donde no hay teclado)
+    dom.cropBtn.addEventListener('click', () => {
+        if (state.mode === 'manual') cropManualSelection();
+        else if (state.mode === 'grid') cropGridSelections();
     });
 
     /* ---------------------------------------------------
